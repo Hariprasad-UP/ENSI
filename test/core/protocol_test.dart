@@ -35,6 +35,12 @@ void main() {
       expect(back.event!.keyCode, 65);
     });
 
+    test('clipboard carries text', () {
+      final back = frameRoundTrip(Message.clipboard('copied text 123'));
+      expect(back.kind, MessageKind.clipboard);
+      expect(back.text, 'copied text 123');
+    });
+
     test('control frames carry no payload', () {
       for (final m in [
         const Message.paired(),

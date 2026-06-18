@@ -65,6 +65,9 @@ class PeerSession {
   /// Deliver a received input event (client injects; host ignores for now).
   final void Function(InputEvent event) onInput;
 
+  /// Deliver received clipboard text (FR-21).
+  final void Function(String text)? onClipboard;
+
   static const _heartbeat = Duration(seconds: 2);
   static const _timeout = Duration(seconds: 6);
 
@@ -91,6 +94,7 @@ class PeerSession {
     required this.isHost,
     required this.onChanged,
     required this.onInput,
+    this.onClipboard,
   }) {
     _start();
   }
@@ -135,6 +139,14 @@ class PeerSession {
             m.event != null) {
           onInput(m.event!);
         }
+      case MessageKind.clipboard:
+        final p = peer;
+        if (phase == SessionPhase.connected &&
+            p != null &&
+            trust.isTrusted(p.id, peerFingerprint) &&
+            m.text != null) {
+          onClipboard?.call(m.text!);
+        }
     }
   }
 
@@ -156,6 +168,11 @@ class PeerSession {
   /// Forward a captured input event to a connected, trusted peer.
   void sendInput(InputEvent event) {
     if (phase == SessionPhase.connected) link.send(Message.event(event));
+  }
+
+  /// Sync clipboard text to a connected, trusted peer (FR-21).
+  void sendClipboard(String text) {
+    if (phase == SessionPhase.connected) link.send(Message.clipboard(text));
   }
 
   Future<void> _pinPeer() async {

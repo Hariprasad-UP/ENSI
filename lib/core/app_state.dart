@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../input/input_backend.dart';
 import '../models/device.dart';
@@ -36,6 +37,8 @@ class AppState extends ChangeNotifier {
   final List<PeerSession> _sessions = [];
   PendingPairing? _pendingPairing;
   ControlRouter? _router;
+  Timer? _clipTimer;
+  String _lastClipboard = '';
 
   HostTransport? _hostTransport;
   ClientTransport? _clientTransport;
@@ -69,7 +72,27 @@ class AppState extends ChangeNotifier {
     _peerSub = discovery.peers.listen(_onPeersUpdated);
     await discovery.start();
     await discovery.advertise(_self!, kEnsiPort, fingerprint: _cert!.fingerprint);
+    // Shared clipboard (FR-21): poll the local clipboard and sync changes.
+    _clipTimer = Timer.periodic(
+        const Duration(milliseconds: 700), (_) => _pollClipboard());
     notifyListeners();
+  }
+
+  Future<void> _pollClipboard() async {
+    if (_sessions.isEmpty) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty || text == _lastClipboard) return;
+    _lastClipboard = text;
+    for (final s in List<PeerSession>.of(_sessions)) {
+      s.sendClipboard(text);
+    }
+  }
+
+  void _onRemoteClipboard(String text) {
+    if (text == _lastClipboard) return;
+    _lastClipboard = text; // record first so the poll doesn't echo it back
+    Clipboard.setData(ClipboardData(text: text));
   }
 
   void _onPeersUpdated(List<Peer> found) {
@@ -164,6 +187,7 @@ class AppState extends ChangeNotifier {
         isHost: isHost,
         onChanged: _onSessionChanged,
         onInput: onInput,
+        onClipboard: _onRemoteClipboard,
       );
 
   void _onSessionChanged() {
@@ -299,6 +323,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _clipTimer?.cancel();
     _peerSub?.cancel();
     _captureSub?.cancel();
     _hostConnSub?.cancel();

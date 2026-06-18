@@ -64,6 +64,7 @@ class DeviceList extends StatelessWidget {
   }
 
   Future<void> _showConnectByIp(BuildContext context, AppState state) async {
+    final messenger = ScaffoldMessenger.of(context);
     final controller = TextEditingController();
     final ip = await showDialog<String>(
       context: context,
@@ -88,15 +89,14 @@ class DeviceList extends StatelessWidget {
       ),
     );
     if (ip != null && ip.isNotEmpty) {
-      await _connect(context, () => state.connectToAddress(ip), ip);
+      await _connect(messenger, () => state.connectToAddress(ip), ip);
     }
   }
 
   /// Run a connect action, surfacing any failure as a SnackBar instead of
   /// crashing the app on an unhandled SocketException.
-  Future<void> _connect(BuildContext context, Future<void> Function() action,
-      String label) async {
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _connect(ScaffoldMessengerState messenger,
+      Future<void> Function() action, String label) async {
     try {
       await action();
     } catch (e) {
@@ -121,8 +121,8 @@ class DeviceList extends StatelessWidget {
         );
       default:
         return FilledButton.tonal(
-          onPressed: () =>
-              _connect(context, () => state.connectToHost(peer), peer.info.name),
+          onPressed: () => _connect(ScaffoldMessenger.of(context),
+              () => state.connectToHost(peer), peer.info.name),
           child: const Text('Connect'),
         );
     }

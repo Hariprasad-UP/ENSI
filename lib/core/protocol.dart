@@ -20,6 +20,9 @@ enum MessageKind {
 
   /// A captured/injected input event (FR-10..FR-12).
   event,
+
+  /// Shared clipboard text (FR-21).
+  clipboard,
 }
 
 /// A single framed message exchanged over the (TLS) session transport.
@@ -32,12 +35,14 @@ class Message {
   final DeviceInfo? device; // hello
   final String? fingerprint; // hello
   final InputEvent? event; // event
+  final String? text; // clipboard
 
   const Message({
     required this.kind,
     this.device,
     this.fingerprint,
     this.event,
+    this.text,
   });
 
   factory Message.hello(DeviceInfo device, String fingerprint) =>
@@ -46,6 +51,9 @@ class Message {
   factory Message.event(InputEvent event) =>
       Message(kind: MessageKind.event, event: event);
 
+  factory Message.clipboard(String text) =>
+      Message(kind: MessageKind.clipboard, text: text);
+
   const Message.paired() : this._control(MessageKind.paired);
   const Message.reject() : this._control(MessageKind.reject);
   const Message.heartbeat() : this._control(MessageKind.heartbeat);
@@ -53,13 +61,15 @@ class Message {
   const Message._control(this.kind)
       : device = null,
         fingerprint = null,
-        event = null;
+        event = null,
+        text = null;
 
   Map<String, dynamic> toJson() => {
         'k': kind.index,
         if (device != null) 'd': device!.toJson(),
         if (fingerprint != null) 'f': fingerprint,
         if (event != null) 'e': event!.toJson(),
+        if (text != null) 'c': text,
       };
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -71,6 +81,7 @@ class Message {
         event: j['e'] == null
             ? null
             : InputEvent.fromJson(j['e'] as Map<String, dynamic>),
+        text: j['c'] as String?,
       );
 
   /// One newline-delimited frame, ready to write to a socket.
