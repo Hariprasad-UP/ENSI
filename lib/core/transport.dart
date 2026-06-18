@@ -55,7 +55,9 @@ class HostTransport {
   }
 
   Future<void> stop() async {
-    for (final c in _clients) {
+    // Iterate a copy: destroy() fires each socket's onDone, which mutates
+    // _clients (concurrent-modification otherwise).
+    for (final c in List<Socket>.of(_clients)) {
       c.destroy();
     }
     _clients.clear();
