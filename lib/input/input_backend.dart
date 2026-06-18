@@ -2,7 +2,9 @@ import 'dart:io';
 
 import '../models/device.dart';
 import '../models/input_event.dart';
+import 'linux_x11_backend.dart';
 import 'stub_backend.dart';
+import 'windows_backend.dart';
 
 /// Platform abstraction for capturing and injecting OS-level input.
 ///
@@ -47,9 +49,9 @@ abstract class InputBackend {
   /// Returns the appropriate backend for the current platform. For now every
   /// platform gets the stub; real backends are wired here as they land.
   static InputBackend forCurrentPlatform() {
-    if (Platform.isWindows) return StubInputBackend(label: 'windows');
+    if (Platform.isWindows) return WindowsInputBackend();
     if (Platform.isMacOS) return StubInputBackend(label: 'macos');
-    if (Platform.isLinux) return StubInputBackend(label: 'linux');
+    if (Platform.isLinux) return LinuxX11InputBackend();
     if (Platform.isAndroid) {
       return StubInputBackend(label: 'android', canReceive: false);
     }

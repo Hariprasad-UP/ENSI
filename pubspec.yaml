@@ -43,6 +43,9 @@ dependencies:
   basic_utils: ^5.7.0 # RSA keypair + self-signed X.509 generation (pure Dart)
   crypto: ^3.0.3 # SHA-256 for cert fingerprints + SAS code
   pointycastle: ^4.0.0 # RSA key types used directly by cert_service
+  # M2: native input capture/injection via dart:ffi
+  ffi: ^2.1.0 # typed native pointers/structs (both OSes)
+  win32: ^6.3.0 # Win32 API bindings (SendInput, hooks, EnumDisplayMonitors)
 
 dev_dependencies:
   flutter_test:
