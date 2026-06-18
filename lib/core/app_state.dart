@@ -4,90 +4,223 @@ import 'package:flutter/foundation.dart';
 
 import '../input/input_backend.dart';
 import '../models/device.dart';
+import '../models/input_event.dart';
 import '../models/peer.dart';
+import 'cert_service.dart';
 import 'discovery_service.dart';
 import 'identity.dart';
 import 'layout_manager.dart';
+import 'session.dart';
 import 'transport.dart';
+import 'trust_store.dart';
 
 /// Central application state shared across the UI via `provider` (FR-2, FR-6).
 ///
-/// Wires together the [InputBackend], [DiscoveryService], transports, and
-/// [LayoutManager]. Most of the cross-device behaviour is stubbed at this
-/// milestone (M0/M1) — this class defines the seams so screens can be built
-/// against real state.
+/// Wires together the [InputBackend], [DiscoveryService], TLS transports, the
+/// [CertService] identity, the [TrustStore], and per-peer [PeerSession]s. M1
+/// brings discovery, SAS pairing, and an encrypted session online; actual OS
+/// input capture/injection remains stubbed until M2.
 class AppState extends ChangeNotifier {
   final InputBackend backend;
   final DiscoveryService discovery;
   final LayoutManager layout = LayoutManager();
+  final TrustStore trust = TrustStore();
 
   DeviceInfo? _self;
+  CertService? _cert;
   DeviceRole _role = DeviceRole.idle;
   final List<Peer> _peers = [];
+  final List<PeerSession> _sessions = [];
+  PendingPairing? _pendingPairing;
 
   HostTransport? _hostTransport;
   ClientTransport? _clientTransport;
   StreamSubscription<List<Peer>>? _peerSub;
+  StreamSubscription<PeerLink>? _hostConnSub;
+  StreamSubscription<InputEvent>? _captureSub;
 
   AppState({required this.backend, required this.discovery});
 
   DeviceInfo? get self => _self;
+  String? get fingerprint => _cert?.fingerprint;
   DeviceRole get role => _role;
   List<Peer> get peers => List.unmodifiable(_peers);
+  List<TrustedPeer> get trustedPeers => trust.list();
 
-  /// Initialize identity + start LAN discovery.
+  /// A pairing currently awaiting user action (SAS approve/wait), or null.
+  PendingPairing? get pendingPairing => _pendingPairing;
+
+  /// Initialize identity + TLS cert + trust store, then start LAN discovery and
+  /// begin advertising (FR-1).
   Future<void> init() async {
     _self = await IdentityService.load(backend);
+    _cert = await CertService.loadOrCreate(_self!.id);
+    await trust.load();
     _peerSub = discovery.peers.listen(_onPeersUpdated);
     await discovery.start();
-    await discovery.advertise(_self!, kEnsiPort);
+    await discovery.advertise(_self!, kEnsiPort, fingerprint: _cert!.fingerprint);
     notifyListeners();
   }
 
   void _onPeersUpdated(List<Peer> found) {
     for (final p in found) {
-      if (!_peers.contains(p)) _peers.add(p);
+      if (!_peers.contains(p)) {
+        // Reflect any existing trust immediately in the discovered list.
+        p.trusted = discovery.fingerprintFor(p.info.id) != null &&
+            trust.isTrusted(p.info.id, discovery.fingerprintFor(p.info.id)!);
+        _peers.add(p);
+      }
     }
     notifyListeners();
   }
 
-  /// Make this device the Host and start accepting clients (FR-6, FR-7).
+  /// Make this device the Host and start accepting TLS clients (FR-6, FR-7).
   Future<void> becomeHost() async {
+    final cert = _cert;
+    if (cert == null) return;
     _hostTransport = HostTransport();
-    await _hostTransport!.start();
+    await _hostTransport!.start(context: cert.buildContext());
     _role = DeviceRole.host;
-    // Forward captured input to clients (targeting via layout is a later step).
-    backend.captureStream().listen(_hostTransport!.send);
-    notifyListeners();
-  }
-
-  /// Connect to a Host as a client and inject received input (FR-7, FR-10).
-  Future<void> connectToHost(Peer host) async {
-    _clientTransport = ClientTransport();
-    await _clientTransport!.connect(host.host);
-    _role = backend.canReceiveInput
-        ? DeviceRole.client
-        : DeviceRole.inputSender;
-    _clientTransport!.incoming.listen((event) {
-      if (backend.canReceiveInput) backend.inject(event);
+    _hostConnSub = _hostTransport!.connections.listen((link) {
+      _sessions.add(_newSession(link, isHost: true, onInput: (_) {}));
+    });
+    // Forward captured input to every connected, trusted client.
+    _captureSub = backend.captureStream().listen((event) {
+      for (final s in List<PeerSession>.of(_sessions)) {
+        s.sendInput(event);
+      }
     });
     notifyListeners();
   }
 
-  /// Confirm pairing for a peer (after PIN match) — gates input exchange
-  /// (FR-4, FR-25).
-  void trustPeer(Peer peer) {
-    peer.trusted = true;
-    peer.status = PeerStatus.paired;
+  /// Connect to a Host as a client (FR-7, FR-10). Pairing (if needed) proceeds
+  /// via [pendingPairing] + [approvePairing].
+  Future<void> connectToHost(Peer host) async {
+    final cert = _cert;
+    if (cert == null) return;
+    final client = ClientTransport();
+    final link =
+        await client.connect(host.host, port: host.port, context: cert.buildContext());
+    _clientTransport = client;
+    _sessions.add(_newSession(
+      link,
+      isHost: false,
+      onInput: (event) {
+        if (backend.canReceiveInput) backend.inject(event);
+      },
+    ));
+    _role = backend.canReceiveInput ? DeviceRole.client : DeviceRole.inputSender;
     notifyListeners();
   }
 
+  PeerSession _newSession(
+    PeerLink link, {
+    required bool isHost,
+    required void Function(InputEvent) onInput,
+  }) =>
+      PeerSession(
+        link: link,
+        self: _self!,
+        selfFingerprint: _cert!.fingerprint,
+        trust: trust,
+        backend: backend,
+        isHost: isHost,
+        onChanged: _onSessionChanged,
+        onInput: onInput,
+      );
+
+  void _onSessionChanged() {
+    // Mirror each session's phase onto its discovered Peer row.
+    for (final s in _sessions) {
+      final p = _peerById(s.peerId);
+      if (p == null) continue;
+      p.trusted = s.peerId != null && trust.isTrusted(s.peerId!, s.peerFingerprint);
+      p.status = switch (s.phase) {
+        SessionPhase.connected => PeerStatus.connected,
+        SessionPhase.pairing || SessionPhase.handshaking => PeerStatus.pairing,
+        SessionPhase.rejected => PeerStatus.discovered,
+        SessionPhase.closed => PeerStatus.offline,
+      };
+    }
+
+    // Surface the first session needing SAS attention.
+    PendingPairing? pending;
+    for (final s in _sessions) {
+      if (s.phase == SessionPhase.pairing) {
+        pending = PendingPairing(
+          peerId: s.peerId ?? '',
+          peerName: s.peer?.name ?? 'device',
+          code: s.code,
+          isHost: s.isHost,
+        );
+        break;
+      }
+    }
+    _pendingPairing = pending;
+
+    _sessions.removeWhere((s) =>
+        s.phase == SessionPhase.closed || s.phase == SessionPhase.rejected);
+    notifyListeners();
+  }
+
+  /// Host: approve the active SAS pairing (FR-4, FR-25).
+  Future<void> approvePairing() async {
+    final pp = _pendingPairing;
+    if (pp == null) return;
+    await _sessionFor(pp.peerId)?.approve();
+  }
+
+  /// Reject the active SAS pairing.
+  Future<void> rejectPairing() async {
+    final pp = _pendingPairing;
+    if (pp == null) return;
+    await _sessionFor(pp.peerId)?.reject();
+  }
+
+  /// Confirm pairing for a peer — kept for compatibility; the real flow is
+  /// driven by [pendingPairing] + [approvePairing].
+  Future<void> approveFor(String peerId) => _sessionFor(peerId)?.approve() ?? Future.value();
+
+  /// Revoke a trusted device (FR-26): forget its pinned cert and drop any live
+  /// session with it.
+  Future<void> revokeTrust(String peerId) async {
+    await trust.revoke(peerId);
+    await _sessionFor(peerId)?.dispose();
+    final p = _peerById(peerId);
+    if (p != null) p.trusted = false;
+    notifyListeners();
+  }
+
+  Peer? _peerById(String? id) {
+    if (id == null) return null;
+    for (final p in _peers) {
+      if (p.info.id == id) return p;
+    }
+    return null;
+  }
+
+  PeerSession? _sessionFor(String id) {
+    for (final s in _sessions) {
+      if (s.peerId == id) return s;
+    }
+    return null;
+  }
+
   Future<void> reset() async {
+    await _captureSub?.cancel();
+    await _hostConnSub?.cancel();
+    _captureSub = null;
+    _hostConnSub = null;
+    for (final s in List<PeerSession>.of(_sessions)) {
+      await s.dispose();
+    }
+    _sessions.clear();
     await _hostTransport?.dispose();
     await _clientTransport?.dispose();
     _hostTransport = null;
     _clientTransport = null;
     await backend.releaseAllKeys(); // NFR-2: no stuck keys
+    _pendingPairing = null;
     _role = DeviceRole.idle;
     notifyListeners();
   }
@@ -95,6 +228,11 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _peerSub?.cancel();
+    _captureSub?.cancel();
+    _hostConnSub?.cancel();
+    for (final s in _sessions) {
+      s.dispose();
+    }
     _hostTransport?.dispose();
     _clientTransport?.dispose();
     discovery.dispose();

@@ -5,9 +5,12 @@ import '../core/app_state.dart';
 import '../models/device.dart';
 import 'device_list.dart';
 import 'layout_editor.dart';
+import 'pairing_dialog.dart';
+import 'trusted_devices_screen.dart';
 
 /// Top-level shell: shows this device's identity + role, the discovered peer
-/// list, and an entry point to the layout editor.
+/// list, and entry points to the layout editor and trusted devices. Surfaces
+/// the SAS pairing dialog automatically whenever a pairing needs attention.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -16,6 +19,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  bool _pairingDialogOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -25,15 +30,36 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _maybeShowPairing(AppState state) {
+    if (state.pendingPairing == null || _pairingDialogOpen) return;
+    _pairingDialogOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const PairingDialog(),
+      );
+      _pairingDialogOpen = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final self = state.self;
+    _maybeShowPairing(state);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('ENSI'),
         actions: [
+          IconButton(
+            tooltip: 'Trusted devices',
+            icon: const Icon(Icons.verified_user_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TrustedDevicesScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Layout',
             icon: const Icon(Icons.grid_view),
@@ -48,7 +74,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _SelfCard(self: self, role: state.role),
+            _SelfCard(
+              self: self,
+              role: state.role,
+              trustedCount: state.trustedPeers.length,
+            ),
             const SizedBox(height: 16),
             _RoleControls(state: state),
             const SizedBox(height: 16),
@@ -66,7 +96,12 @@ class _HomeScreenState extends State<HomeScreen> {
 class _SelfCard extends StatelessWidget {
   final DeviceInfo? self;
   final DeviceRole role;
-  const _SelfCard({required this.self, required this.role});
+  final int trustedCount;
+  const _SelfCard({
+    required this.self,
+    required this.role,
+    required this.trustedCount,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +113,8 @@ class _SelfCard extends StatelessWidget {
             ? '—'
             : '${self!.platform.name} · '
                 '${self!.displays.monitors.length} monitor(s) · '
-                'role: ${role.name}'),
+                'role: ${role.name} · '
+                '$trustedCount trusted'),
         trailing: self?.canReceiveInput == false
             ? const Chip(label: Text('sender only'))
             : null,

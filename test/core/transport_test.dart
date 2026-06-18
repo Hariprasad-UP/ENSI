@@ -1,29 +1,39 @@
 import 'dart:io';
 
+import 'package:ensi/core/cert_service.dart';
+import 'package:ensi/core/protocol.dart';
 import 'package:ensi/core/transport.dart';
 import 'package:ensi/models/input_event.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// Integration test for the host/client TCP transport over loopback. Verifies
-/// the end-to-end framing (encode -> socket -> line-split -> decode) in both
-/// directions. Runs entirely on 127.0.0.1, no LAN required.
+/// Integration test for the TLS session transport over loopback. Verifies
+/// end-to-end Message framing in both directions AND that each side captures the
+/// other's certificate fingerprint (the basis for pairing/trust).
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late CertService hostCert;
+  late CertService clientCert;
+
+  setUpAll(() async {
+    SharedPreferences.setMockInitialValues({});
+    hostCert = await CertService.loadOrCreate('host');
+    SharedPreferences.setMockInitialValues({});
+    clientCert = await CertService.loadOrCreate('client');
+  });
+
   late HostTransport host;
   late ClientTransport client;
   late int port;
 
   setUp(() async {
-    // Grab a free ephemeral port to avoid clashing with a running app.
     final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     port = probe.port;
     await probe.close();
-
     host = HostTransport();
-    await host.start(port: port);
+    await host.start(port: port, context: hostCert.buildContext());
     client = ClientTransport();
-    await client.connect('127.0.0.1', port: port);
-    // Let the server finish accepting the connection before we send.
-    await Future<void>.delayed(const Duration(milliseconds: 150));
   });
 
   tearDown(() async {
@@ -31,37 +41,38 @@ void main() {
     await host.dispose();
   });
 
-  test('client -> host: an event sent by the client reaches the host', () async {
-    final received = host.incoming.first;
-    client.send(const InputEvent(
-      type: InputEventType.keyDown,
-      keyCode: 65,
-      modifiers: InputModifiers.ctrl,
-    ));
-    final e = await received.timeout(const Duration(seconds: 5));
-    expect(e.type, InputEventType.keyDown);
-    expect(e.keyCode, 65);
-    expect(e.modifiers, InputModifiers.ctrl);
-  });
-
-  test('host -> client: an event broadcast by the host reaches the client',
+  test('client cryptographically captures the host certificate fingerprint',
       () async {
-    final received = client.incoming.first;
-    host.send(const InputEvent(type: InputEventType.mouseMove, x: 42, y: 99));
-    final e = await received.timeout(const Duration(seconds: 5));
-    expect(e.type, InputEventType.mouseMove);
-    expect(e.x, 42);
-    expect(e.y, 99);
+    final hostLinkFuture = host.connections.first;
+    final clientLink =
+        await client.connect('127.0.0.1', port: port, context: clientCert.buildContext());
+    final hostLink = await hostLinkFuture.timeout(const Duration(seconds: 5));
+
+    // Server-authenticated TLS: the client sees the host's real cert...
+    expect(clientLink.peerFingerprint, hostCert.fingerprint);
+    // ...while the host gets no client cert over TLS (it learns the client's
+    // fingerprint from the `hello` frame at the session layer instead).
+    expect(hostLink.peerFingerprint, isEmpty);
   });
 
-  test('multiple frames are delivered in order', () async {
-    final got = <int>[];
-    final sub = host.incoming.listen((e) => got.add(e.keyCode!));
-    for (var i = 0; i < 5; i++) {
-      client.send(InputEvent(type: InputEventType.keyDown, keyCode: i));
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    await sub.cancel();
-    expect(got, [0, 1, 2, 3, 4]);
+  test('messages round-trip in both directions over TLS', () async {
+    final hostLinkFuture = host.connections.first;
+    final clientLink =
+        await client.connect('127.0.0.1', port: port, context: clientCert.buildContext());
+    final hostLink = await hostLinkFuture.timeout(const Duration(seconds: 5));
+
+    // client -> host
+    final hostGot = hostLink.incoming.first;
+    clientLink.send(Message.event(
+        const InputEvent(type: InputEventType.keyDown, keyCode: 65)));
+    final m1 = await hostGot.timeout(const Duration(seconds: 5));
+    expect(m1.kind, MessageKind.event);
+    expect(m1.event!.keyCode, 65);
+
+    // host -> client
+    final clientGot = clientLink.incoming.first;
+    hostLink.send(const Message.heartbeat());
+    final m2 = await clientGot.timeout(const Duration(seconds: 5));
+    expect(m2.kind, MessageKind.heartbeat);
   });
 }

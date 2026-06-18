@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 import '../core/app_state.dart';
 import '../models/peer.dart';
 
-/// Lists peers discovered on the LAN and lets the user connect/pair (FR-2,
-/// FR-4). A real PIN-pairing dialog lands in M1.
+/// Lists peers discovered on the LAN and lets the user connect (FR-2). Pairing
+/// (the SAS dialog) is surfaced globally by the home screen via
+/// [AppState.pendingPairing]; here we just kick off the connection and reflect
+/// live per-peer status.
 class DeviceList extends StatelessWidget {
   const DeviceList({super.key});
 
@@ -36,43 +38,54 @@ class DeviceList extends StatelessWidget {
           leading: Icon(peer.trusted ? Icons.verified_user : Icons.devices),
           title: Text(peer.displayName),
           subtitle: Text('${peer.endpoint} · ${peer.status.name}'),
-          trailing: FilledButton.tonal(
-            onPressed: () => _connect(context, state, peer),
-            child: const Text('Connect'),
-          ),
+          trailing: _trailingFor(context, state, peer),
+          onLongPress: peer.trusted
+              ? () => _confirmRevoke(context, state, peer)
+              : null,
         );
       },
     );
   }
 
-  Future<void> _connect(
-      BuildContext context, AppState state, Peer peer) async {
-    if (!peer.trusted) {
-      final ok = await _showPairDialog(context, peer);
-      if (ok != true) return;
-      state.trustPeer(peer);
+  Widget _trailingFor(BuildContext context, AppState state, Peer peer) {
+    switch (peer.status) {
+      case PeerStatus.connected:
+        return const Chip(
+          avatar: Icon(Icons.link, size: 18),
+          label: Text('Connected'),
+        );
+      case PeerStatus.pairing:
+        return const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+      default:
+        return FilledButton.tonal(
+          onPressed: () => state.connectToHost(peer),
+          child: const Text('Connect'),
+        );
     }
-    await state.connectToHost(peer);
   }
 
-  Future<bool?> _showPairDialog(BuildContext context, Peer peer) {
-    return showDialog<bool>(
+  Future<void> _confirmRevoke(
+      BuildContext context, AppState state, Peer peer) async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Pair with ${peer.info.name}?'),
+        title: Text('Revoke ${peer.info.name}?'),
         content: const Text(
-          'Confirm the matching PIN is shown on the other device.\n'
-          '(PIN exchange + TLS pairing is implemented in milestone M1.)',
-        ),
+            'This device will have to pair again before it can connect.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Cancel')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Pair')),
+              child: const Text('Revoke')),
         ],
       ),
     );
+    if (ok == true) await state.revokeTrust(peer.info.id);
   }
 }

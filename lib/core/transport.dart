@@ -2,33 +2,26 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../models/input_event.dart';
+import 'cert_service.dart';
+import 'protocol.dart';
 
-/// Default TCP port for the ENSI input stream.
+/// Default TCP port for the ENSI session stream.
 const int kEnsiPort = 24800;
 
-/// Host-side transport: listens for client connections and broadcasts captured
-/// [InputEvent]s to the active client (FR-7, FR-10..FR-12).
-///
-/// v1 uses a plain [ServerSocket]; this MUST be upgraded to [SecureSocket]
-/// (TLS) before any real input flows (FR-24, NFR-4). Pairing/trust gating
-/// (FR-25) is enforced one layer up in the session manager.
-class HostTransport {
-  ServerSocket? _server;
-  final List<Socket> _clients = [];
+/// One established, **TLS-encrypted** session to a single peer (FR-24, NFR-4),
+/// carrying newline-framed [Message]s in both directions. The peer's certificate
+/// [fingerprint] (captured from the TLS handshake) is the authoritative identity
+/// used for pairing/trust — see `session.dart` and [TrustStore].
+class PeerLink {
+  final SecureSocket socket;
 
-  final _incoming = StreamController<InputEvent>.broadcast();
+  /// SHA-256 of the peer's TLS certificate, or '' if none was presented.
+  final String peerFingerprint;
 
-  /// Events received *from* clients (e.g. a mobile input-sender, FR-14).
-  Stream<InputEvent> get incoming => _incoming.stream;
+  final _incoming = StreamController<Message>.broadcast();
+  bool _closed = false;
 
-  Future<void> start({int port = kEnsiPort}) async {
-    _server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
-    _server!.listen(_onClient);
-  }
-
-  void _onClient(Socket socket) {
-    _clients.add(socket);
+  PeerLink(this.socket, this.peerFingerprint) {
     socket
         .cast<List<int>>()
         .transform(utf8.decoder)
@@ -37,74 +30,124 @@ class HostTransport {
       (line) {
         if (line.trim().isEmpty) return;
         try {
-          _incoming.add(InputEvent.decodeFrame(line));
+          _incoming.add(Message.decodeFrame(line));
         } catch (_) {/* ignore malformed frame */}
       },
-      onDone: () => _clients.remove(socket),
-      onError: (_) => _clients.remove(socket),
+      onDone: _close,
+      onError: (_) => _close(),
     );
   }
 
-  /// Forward an event to all connected clients. (Targeting a *specific* client
-  /// based on the layout edge-switch is handled by the session manager.)
-  void send(InputEvent event) {
-    final frame = event.encodeFrame();
-    for (final c in _clients) {
-      c.add(frame);
+  Stream<Message> get incoming => _incoming.stream;
+
+  void send(Message message) {
+    if (_closed) return;
+    try {
+      socket.add(message.encodeFrame());
+    } catch (_) {/* socket gone; watchdog/onDone will clean up */}
+  }
+
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    if (!_incoming.isClosed) _incoming.close();
+  }
+
+  Future<void> dispose() async {
+    _close();
+    socket.destroy();
+  }
+
+  static String _fingerprintOf(SecureSocket socket) {
+    final cert = socket.peerCertificate;
+    return cert == null ? '' : CertService.fingerprintOf(cert);
+  }
+}
+
+/// Host side: accepts TLS client connections and surfaces each as a [PeerLink]
+/// on [connections]. Targeting input to the right client by layout edge is the
+/// session/layout layer's job; [broadcast] sends to all current links.
+///
+/// TLS is **server-authenticated**: the host presents its cert and the client
+/// pins it (cryptographic). `dart:io` cannot accept a self-signed *client* cert,
+/// so the host learns the client's fingerprint from the `hello` frame instead;
+/// SAS pairing stays MITM-safe because it is anchored on the client's
+/// cryptographic view of the host cert (see `session.dart`).
+class HostTransport {
+  SecureServerSocket? _server;
+  final List<PeerLink> _links = [];
+  final _connections = StreamController<PeerLink>.broadcast();
+
+  Stream<PeerLink> get connections => _connections.stream;
+  List<PeerLink> get links => List.unmodifiable(_links);
+
+  Future<void> start({
+    int port = kEnsiPort,
+    required SecurityContext context,
+  }) async {
+    _server = await SecureServerSocket.bind(
+      InternetAddress.anyIPv4,
+      port,
+      context,
+    );
+    _server!.listen(_onClient);
+  }
+
+  void _onClient(SecureSocket socket) {
+    final link = PeerLink(socket, PeerLink._fingerprintOf(socket));
+    _links.add(link);
+    // Drop the link from the list when its stream ends.
+    link.incoming.listen((_) {}, onDone: () => _links.remove(link));
+    _connections.add(link);
+  }
+
+  void broadcast(Message message) {
+    for (final l in List<PeerLink>.of(_links)) {
+      l.send(message);
     }
   }
 
   Future<void> stop() async {
-    // Iterate a copy: destroy() fires each socket's onDone, which mutates
-    // _clients (concurrent-modification otherwise).
-    for (final c in List<Socket>.of(_clients)) {
-      c.destroy();
+    for (final l in List<PeerLink>.of(_links)) {
+      await l.dispose();
     }
-    _clients.clear();
+    _links.clear();
     await _server?.close();
     _server = null;
   }
 
   Future<void> dispose() async {
     await stop();
-    await _incoming.close();
+    await _connections.close();
   }
 }
 
-/// Client-side transport: connects to a Host and receives [InputEvent]s to be
-/// injected locally.
+/// Client side: opens a TLS connection to a host and returns the [PeerLink].
+/// Self-signed peer certs are accepted at the TLS layer ([onBadCertificate] →
+/// true); identity is then verified out-of-band by SAS pairing + fingerprint
+/// pinning, not by a CA.
 class ClientTransport {
-  Socket? _socket;
-  final _incoming = StreamController<InputEvent>.broadcast();
+  PeerLink? _link;
+  PeerLink? get link => _link;
 
-  /// Events received from the Host, to be injected via the InputBackend.
-  Stream<InputEvent> get incoming => _incoming.stream;
-
-  Future<void> connect(String host, {int port = kEnsiPort}) async {
-    final socket = await Socket.connect(host, port);
-    _socket = socket;
-    socket
-        .cast<List<int>>()
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(
-      (line) {
-        if (line.trim().isEmpty) return;
-        try {
-          _incoming.add(InputEvent.decodeFrame(line));
-        } catch (_) {/* ignore malformed frame */}
-      },
-      onDone: () => _incoming.close(),
-      onError: (_) => _incoming.close(),
+  Future<PeerLink> connect(
+    String host, {
+    int port = kEnsiPort,
+    required SecurityContext context,
+  }) async {
+    final socket = await SecureSocket.connect(
+      host,
+      port,
+      context: context,
+      onBadCertificate: (_) => true, // TOFU: pin via fingerprint after pairing
     );
+    final link = PeerLink(socket, PeerLink._fingerprintOf(socket));
+    _link = link;
+    return link;
   }
 
-  /// Send an event to the Host (used by mobile input-sender, FR-14).
-  void send(InputEvent event) => _socket?.add(event.encodeFrame());
-
   Future<void> dispose() async {
-    _socket?.destroy();
-    _socket = null;
-    if (!_incoming.isClosed) await _incoming.close();
+    await _link?.dispose();
+    _link = null;
   }
 }
