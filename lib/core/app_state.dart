@@ -7,6 +7,7 @@ import '../models/device.dart';
 import '../models/input_event.dart';
 import '../models/peer.dart';
 import 'cert_service.dart';
+import 'control_router.dart';
 import 'discovery_service.dart';
 import 'identity.dart';
 import 'layout_manager.dart';
@@ -32,6 +33,7 @@ class AppState extends ChangeNotifier {
   final List<Peer> _peers = [];
   final List<PeerSession> _sessions = [];
   PendingPairing? _pendingPairing;
+  ControlRouter? _router;
 
   HostTransport? _hostTransport;
   ClientTransport? _clientTransport;
@@ -81,15 +83,26 @@ class AppState extends ChangeNotifier {
     _hostTransport = HostTransport();
     await _hostTransport!.start(context: cert.buildContext());
     _role = DeviceRole.host;
+
+    // Edge-switch routing: place self in the layout and route captured input
+    // through the ControlRouter, which forwards to the peer that owns the cursor.
+    final displays = await backend.queryDisplays();
+    final m = displays.monitors.first;
+    layout.placeDevice(_self!.id, displays, offsetX: 0, offsetY: 0);
+    _router = ControlRouter(
+      selfId: _self!.id,
+      selfWidth: m.width,
+      selfHeight: m.height,
+      layout: layout,
+      onSuppress: backend.suppressLocal,
+      onWarp: backend.warpCursor,
+      onForward: (peerId, e) => _sessionFor(peerId)?.sendInput(e),
+    );
+
     _hostConnSub = _hostTransport!.connections.listen((link) {
       _sessions.add(_newSession(link, isHost: true, onInput: (_) {}));
     });
-    // Forward captured input to every connected, trusted client.
-    _captureSub = backend.captureStream().listen((event) {
-      for (final s in List<PeerSession>.of(_sessions)) {
-        s.sendInput(event);
-      }
-    });
+    _captureSub = backend.captureStream().listen(_router!.onCaptured);
     notifyListeners();
   }
 
@@ -143,6 +156,18 @@ class AppState extends ChangeNotifier {
       };
     }
 
+    // Auto-arrange a newly connected peer to the right of this host so
+    // edge-switch works out of the box (custom layouts come from the editor).
+    final selfPlacement = layout.placements[_self?.id];
+    for (final s in _sessions) {
+      if (s.phase == SessionPhase.connected &&
+          s.peer != null &&
+          !layout.placements.containsKey(s.peer!.id)) {
+        layout.placeDevice(s.peer!.id, s.peer!.displays,
+            offsetX: selfPlacement?.width ?? 1920, offsetY: 0);
+      }
+    }
+
     // Surface the first session needing SAS attention.
     PendingPairing? pending;
     for (final s in _sessions) {
@@ -160,6 +185,11 @@ class AppState extends ChangeNotifier {
 
     _sessions.removeWhere((s) =>
         s.phase == SessionPhase.closed || s.phase == SessionPhase.rejected);
+
+    // If the peer that held the cursor is gone, return control locally.
+    final owner = _router?.owner;
+    if (owner != null && _sessionFor(owner) == null) _router!.reset();
+
     notifyListeners();
   }
 
@@ -219,6 +249,8 @@ class AppState extends ChangeNotifier {
     await _clientTransport?.dispose();
     _hostTransport = null;
     _clientTransport = null;
+    _router?.reset(); // lifts local-input suppression
+    _router = null;
     await backend.releaseAllKeys(); // NFR-2: no stuck keys
     _pendingPairing = null;
     _role = DeviceRole.idle;

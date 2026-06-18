@@ -44,6 +44,12 @@ class StubInputBackend implements InputBackend {
   bool get canReceiveInput => _canReceive;
 
   @override
+  void suppressLocal(bool on) => _log('suppressLocal($on)');
+
+  @override
+  void warpCursor(double x, double y) => _log('warpCursor($x, $y)');
+
+  @override
   Future<void> dispose() async {
     await _controller.close();
   }

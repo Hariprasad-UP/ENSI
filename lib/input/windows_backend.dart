@@ -70,9 +70,11 @@ class WindowsInputBackend implements InputBackend {
     return _controller.stream;
   }
 
-  /// Phase 3 hook: when true, captured local input is swallowed (not delivered
-  /// to local apps) because control is on a remote screen.
-  void setSuppress(bool on) => _suppress?.value = on ? 1 : 0;
+  @override
+  void suppressLocal(bool on) => _suppress?.value = on ? 1 : 0;
+
+  @override
+  void warpCursor(double x, double y) => SetCursorPos(x.round(), y.round());
 
   void _startCapture() {
     if (_rp != null) return; // already capturing
@@ -125,6 +127,7 @@ class WindowsInputBackend implements InputBackend {
       case InputEventType.releaseAll:
         await releaseAllKeys();
       case InputEventType.enterScreen:
+        if (e.x != null && e.y != null) _moveAbsolute(e.x!, e.y!);
       case InputEventType.leaveScreen:
         break;
     }

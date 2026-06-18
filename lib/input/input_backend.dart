@@ -44,6 +44,14 @@ abstract class InputBackend {
   /// Whether this backend can inject OS-level input (false on mobile).
   bool get canReceiveInput;
 
+  /// Host edge-switch (FR-17): suppress (true) or restore (false) local OS input
+  /// delivery while the cursor is on a remote screen. No-op where unsupported.
+  void suppressLocal(bool on);
+
+  /// Warp the local cursor to (x, y) in this device's pixels (host side, used to
+  /// recentre while routing and to return the cursor on edge-back).
+  void warpCursor(double x, double y);
+
   Future<void> dispose();
 
   /// Returns the appropriate backend for the current platform. For now every

@@ -44,12 +44,18 @@ class EdgeSwitch {
 class LayoutManager {
   final Map<String, LayoutPlacement> placements = {};
 
-  void place(Peer peer, {double offsetX = 0, double offsetY = 0}) {
-    placements[peer.info.id] = LayoutPlacement(
-      deviceId: peer.info.id,
+  void place(Peer peer, {double offsetX = 0, double offsetY = 0}) =>
+      placeDevice(peer.info.id, peer.info.displays,
+          offsetX: offsetX, offsetY: offsetY);
+
+  /// Place any device (including this host) by id + geometry.
+  void placeDevice(String deviceId, DisplayGeometry displays,
+      {double offsetX = 0, double offsetY = 0}) {
+    placements[deviceId] = LayoutPlacement(
+      deviceId: deviceId,
       offsetX: offsetX,
       offsetY: offsetY,
-      displays: peer.info.displays,
+      displays: displays,
     );
   }
 
