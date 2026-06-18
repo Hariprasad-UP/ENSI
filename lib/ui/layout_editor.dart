@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/app_state.dart';
+import '../models/device.dart';
 import '../models/peer.dart';
 
 /// Visual editor for arranging device screens on the shared 2D layout (FR-15,
-/// FR-18). Each device is a draggable tile sized to its display geometry; the
-/// resulting edge-adjacency drives cursor switching (FR-17).
-///
-/// This is a functional drag-to-arrange skeleton; snapping/persistence
-/// (FR-20) and per-monitor splitting are refined in M3.
+/// FR-18, FR-20). Each device is a draggable tile sized to its display geometry;
+/// the arrangement is written to [AppState.layout] and persisted, and it drives
+/// cursor edge-switching (FR-17) via the host's ControlRouter.
 class LayoutEditor extends StatefulWidget {
   const LayoutEditor({super.key});
 
@@ -21,24 +20,23 @@ class _LayoutEditorState extends State<LayoutEditor> {
   // Scale factor: layout pixels -> editor pixels.
   static const double _scale = 0.12;
 
-  // Local editor positions keyed by device id.
-  final Map<String, Offset> _positions = {};
+  // In-progress drag positions (editor pixels) keyed by device id.
+  final Map<String, Offset> _drag = {};
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
     final tiles = <_DeviceTile>[];
 
-    // Include self + peers.
     var index = 0;
     final self = state.self;
     if (self != null) {
       tiles.add(_DeviceTile(
         id: self.id,
         label: '${self.name}\n(this device)',
-        width: _layoutWidth(self.displays.monitors),
-        height: _layoutHeight(self.displays.monitors),
-        color: Theme.of(context).colorScheme.primaryContainer,
+        displays: self.displays,
+        color: scheme.primaryContainer,
         index: index++,
       ));
     }
@@ -46,9 +44,8 @@ class _LayoutEditorState extends State<LayoutEditor> {
       tiles.add(_DeviceTile(
         id: p.info.id,
         label: p.info.name,
-        width: 1920,
-        height: 1080,
-        color: Theme.of(context).colorScheme.secondaryContainer,
+        displays: p.info.displays,
+        color: scheme.secondaryContainer,
         index: index++,
       ));
     }
@@ -61,7 +58,7 @@ class _LayoutEditorState extends State<LayoutEditor> {
             padding: EdgeInsets.all(12),
             child: Text(
               'Drag each device so its screen edges touch its neighbours. '
-              'The cursor crosses where edges meet.',
+              'The cursor crosses to a device where their edges meet.',
             ),
           ),
           Expanded(
@@ -74,9 +71,7 @@ class _LayoutEditorState extends State<LayoutEditor> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: Stack(
-                  children: [
-                    for (final t in tiles) _buildTile(t),
-                  ],
+                  children: [for (final t in tiles) _buildTile(context, state, t)],
                 ),
               ),
             ),
@@ -86,18 +81,24 @@ class _LayoutEditorState extends State<LayoutEditor> {
     );
   }
 
-  Widget _buildTile(_DeviceTile t) {
-    final pos = _positions[t.id] ??
-        Offset(20 + t.index * (t.width * _scale + 16), 40);
-    _positions[t.id] = pos;
+  Widget _buildTile(BuildContext context, AppState state, _DeviceTile t) {
+    final placement = state.layout.placements[t.id];
+    final pos = _drag[t.id] ??
+        (placement != null
+            ? Offset(placement.offsetX * _scale, placement.offsetY * _scale)
+            : Offset(20 + t.index * (t.width * _scale + 16), 40));
 
     return Positioned(
       left: pos.dx,
       top: pos.dy,
       child: GestureDetector(
         onPanUpdate: (d) => setState(() {
-          _positions[t.id] = _positions[t.id]! + d.delta;
+          _drag[t.id] = (_drag[t.id] ?? pos) + d.delta;
         }),
+        onPanEnd: (_) {
+          final p = _drag[t.id] ?? pos;
+          state.setLayoutOffset(t.id, t.displays, p.dx / _scale, p.dy / _scale);
+        },
         child: Container(
           width: t.width * _scale,
           height: t.height * _scale,
@@ -112,24 +113,25 @@ class _LayoutEditorState extends State<LayoutEditor> {
       ),
     );
   }
-
-  double _layoutWidth(List monitors) => 1920;
-  double _layoutHeight(List monitors) => 1080;
 }
 
 class _DeviceTile {
   final String id;
   final String label;
-  final double width;
-  final double height;
+  final DisplayGeometry displays;
   final Color color;
   final int index;
   _DeviceTile({
     required this.id,
     required this.label,
-    required this.width,
-    required this.height,
+    required this.displays,
     required this.color,
     required this.index,
   });
+
+  double get width => _extent((m) => m.right);
+  double get height => _extent((m) => m.bottom);
+
+  double _extent(double Function(MonitorGeometry) f) =>
+      displays.monitors.map(f).fold<double>(0, (a, b) => a > b ? a : b);
 }

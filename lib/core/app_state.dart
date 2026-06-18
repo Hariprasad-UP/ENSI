@@ -11,6 +11,7 @@ import 'control_router.dart';
 import 'discovery_service.dart';
 import 'identity.dart';
 import 'layout_manager.dart';
+import 'layout_store.dart';
 import 'session.dart';
 import 'transport.dart';
 import 'trust_store.dart';
@@ -26,6 +27,7 @@ class AppState extends ChangeNotifier {
   final DiscoveryService discovery;
   final LayoutManager layout = LayoutManager();
   final TrustStore trust = TrustStore();
+  final LayoutStore _layoutStore = LayoutStore();
 
   DeviceInfo? _self;
   CertService? _cert;
@@ -58,6 +60,12 @@ class AppState extends ChangeNotifier {
     _self = await IdentityService.load(backend);
     _cert = await CertService.loadOrCreate(_self!.id);
     await trust.load();
+    await _layoutStore.load();
+    // Place this device on the shared layout (saved position, else origin).
+    final myDisplays = await backend.queryDisplays();
+    final myOff = _layoutStore.offsetFor(_self!.id);
+    layout.placeDevice(_self!.id, myDisplays,
+        offsetX: myOff?.x ?? 0, offsetY: myOff?.y ?? 0);
     _peerSub = discovery.peers.listen(_onPeersUpdated);
     await discovery.start();
     await discovery.advertise(_self!, kEnsiPort, fingerprint: _cert!.fingerprint);
@@ -88,7 +96,9 @@ class AppState extends ChangeNotifier {
     // through the ControlRouter, which forwards to the peer that owns the cursor.
     final displays = await backend.queryDisplays();
     final m = displays.monitors.first;
-    layout.placeDevice(_self!.id, displays, offsetX: 0, offsetY: 0);
+    final selfOff = _layoutStore.offsetFor(_self!.id);
+    layout.placeDevice(_self!.id, displays,
+        offsetX: selfOff?.x ?? 0, offsetY: selfOff?.y ?? 0);
     _router = ControlRouter(
       selfId: _self!.id,
       selfWidth: m.width,
@@ -164,8 +174,10 @@ class AppState extends ChangeNotifier {
       if (s.phase == SessionPhase.connected &&
           s.peer != null &&
           !layout.placements.containsKey(s.peer!.id)) {
+        final off = _layoutStore.offsetFor(s.peer!.id);
         layout.placeDevice(s.peer!.id, s.peer!.displays,
-            offsetX: selfPlacement?.width ?? 1920, offsetY: 0);
+            offsetX: off?.x ?? (selfPlacement?.width ?? 1920),
+            offsetY: off?.y ?? 0);
       }
     }
 
@@ -219,6 +231,14 @@ class AppState extends ChangeNotifier {
     await _sessionFor(peerId)?.dispose();
     final p = _peerById(peerId);
     if (p != null) p.trusted = false;
+    notifyListeners();
+  }
+
+  /// Persist a device's position on the shared layout (called from the editor).
+  Future<void> setLayoutOffset(
+      String id, DisplayGeometry displays, double x, double y) async {
+    layout.placeDevice(id, displays, offsetX: x, offsetY: y);
+    await _layoutStore.set(id, x, y);
     notifyListeners();
   }
 
