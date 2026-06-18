@@ -15,6 +15,10 @@ class ControlRouter {
   final String selfId;
   final double selfWidth;
   final double selfHeight;
+
+  /// This host's display scale (DPI/96). Used to normalize cursor speed across
+  /// machines with different scaling (FR-19).
+  final double selfScale;
   final LayoutManager layout;
 
   /// Suppress (true) / restore (false) local OS input delivery.
@@ -38,6 +42,7 @@ class ControlRouter {
     required this.onSuppress,
     required this.onWarp,
     required this.onForward,
+    this.selfScale = 1.0,
   });
 
   bool get controlIsRemote => _owner != null;
@@ -103,9 +108,10 @@ class ControlRouter {
         final dy = e.y! - _cy;
         onWarp(_cx, _cy); // keep the real cursor centred
         if (dx == 0 && dy == 0) return;
-        _vx += dx;
-        _vy += dy;
         final p = layout.placements[peer]!;
+        final factor = _scaleFactor(p); // DPI normalization (FR-19)
+        _vx += dx * factor;
+        _vy += dy * factor;
         if (_shouldReturn(p.width, p.height)) {
           _returnLocal();
           return;
@@ -124,6 +130,13 @@ class ControlRouter {
       case InputEventType.releaseAll:
         break;
     }
+  }
+
+  double _scaleFactor(LayoutPlacement p) {
+    final ts =
+        p.displays.monitors.isNotEmpty ? p.displays.monitors.first.scale : 1.0;
+    final ss = selfScale == 0 ? 1.0 : selfScale;
+    return ts / ss;
   }
 
   bool _shouldReturn(double tw, double th) {
@@ -145,6 +158,8 @@ class ControlRouter {
     final peer = _owner;
     final edge = _entryEdge;
     if (peer != null) {
+      // Release anything held on the remote so nothing sticks (NFR-2).
+      onForward(peer, const InputEvent(type: InputEventType.releaseAll));
       onForward(peer, const InputEvent(type: InputEventType.leaveScreen));
     }
     _owner = null;

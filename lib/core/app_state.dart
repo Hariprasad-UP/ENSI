@@ -93,6 +93,7 @@ class AppState extends ChangeNotifier {
       selfId: _self!.id,
       selfWidth: m.width,
       selfHeight: m.height,
+      selfScale: m.scale,
       layout: layout,
       onSuppress: backend.suppressLocal,
       onWarp: backend.warpCursor,

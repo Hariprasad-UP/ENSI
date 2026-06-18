@@ -90,5 +90,30 @@ void main() {
     expect(router.controlIsRemote, isFalse);
     expect(suppress.last, isFalse); // restored
     expect(forwards.last.value.type, InputEventType.leaveScreen);
+    // A releaseAll is sent to the remote so nothing sticks (NFR-2).
+    expect(forwards.any((f) => f.value.type == InputEventType.releaseAll), isTrue);
+  });
+
+  test('cursor speed is DPI-normalized to the target scale (FR-19)', () {
+    final l = LayoutManager()
+      ..placeDevice('H', DisplayGeometry.single(width: 1000, height: 1000), offsetX: 0)
+      ..placeDevice('C', DisplayGeometry.single(width: 1000, height: 1000, scale: 2.0),
+          offsetX: 1000);
+    final fwd = <MapEntry<String, InputEvent>>[];
+    final r = ControlRouter(
+      selfId: 'H',
+      selfWidth: 1000,
+      selfHeight: 1000,
+      selfScale: 1.0,
+      layout: l,
+      onSuppress: (_) {},
+      onWarp: (x, y) {},
+      onForward: (p, e) => fwd.add(MapEntry(p, e)),
+    );
+    r.onCaptured(const InputEvent(type: InputEventType.mouseMove, x: 1000, y: 500)); // enter at vx=1
+    fwd.clear();
+    r.onCaptured(const InputEvent(type: InputEventType.mouseMove, x: 600, y: 500)); // dx=100
+    // factor = targetScale(2) / selfScale(1) = 2  ->  vx = 1 + 200 = 201
+    expect(fwd.single.value.x, closeTo(201, 0.001));
   });
 }
