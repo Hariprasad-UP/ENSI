@@ -4,7 +4,9 @@ Share **one keyboard and mouse across multiple devices** on the same Wi‑Fi/LAN
 Move your cursor off the edge of one screen and it appears on the next device —
 a cross‑platform software KVM built with **Flutter**.
 
-> Status: **early / requirements phase.** See the full spec in
+> Status: **M1 — encrypted discovery + pairing.** Two desktops auto‑discover on
+> the LAN, pair with a matching 6‑digit code, and hold a TLS session. OS‑level
+> keyboard/mouse capture & injection land in **M2**. Full spec in
 > [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
 
 ## Features (target)
