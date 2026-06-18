@@ -254,13 +254,13 @@ See [`scripts/install.sh`](../scripts/install.sh) and
 
 ## 7. Acceptance Criteria (v1 "done")
 - [ ] Two desktops (different OSes) auto‑discover and pair via a SAS code. *(implemented in M1; loopback‑tested, two‑machine field test pending)*
-- [ ] Cursor crosses from Host screen edge to Client screen and back.
-- [ ] Keyboard input (incl. modifiers) types correctly on the Client.
+- [ ] Cursor crosses from Host screen edge to Client screen and back. *(implemented in M2 via ControlRouter; routing logic unit‑tested; two‑machine field test pending)*
+- [ ] Keyboard input (incl. modifiers) types correctly on the Client. *(implemented in M2; keymap unit‑tested; field test pending)*
 - [ ] Multi‑monitor device aligns per‑monitor in the layout editor.
 - [ ] A phone connects and drives the Host as touchpad + keyboard.
 - [x] Traffic is TLS‑encrypted; unpaired device is rejected. *(M1: server‑authenticated TLS + fingerprint‑pinned trust gating; covered by automated tests)*
 - [ ] `install.sh` / `install.ps1` install the correct build on each OS via one command.
-- [ ] No stuck keys after a forced disconnect.
+- [x] No stuck keys after a forced disconnect. *(M2: per‑backend held‑key tracking + releaseAllKeys on disconnect/leave‑screen, NFR‑2)*
 
 ---
 
@@ -269,7 +269,7 @@ See [`scripts/install.sh`](../scripts/install.sh) and
 |---|---|---|
 | **M0** | Repo, SRS, installer skeleton, CI build matrix. | ✅ Done |
 | **M1** | Discovery + pairing + TLS transport; two desktops connect. | ✅ Implemented (loopback‑tested; two‑machine field test pending) |
-| **M2** | Windows capture/inject backend; single‑screen edge switch. | ⏳ Next |
+| **M2** | Native capture/inject + edge‑switch (real KVM). | ✅ Implemented (Windows host complete; Linux host experimental; X11/Xorg only; field test pending) |
 | **M3** | macOS + Linux (X11) backends; multi‑monitor layout editor. | ⏳ Planned |
 | **M4** | Mobile sender (touchpad/keyboard); shared text clipboard. | ⏳ Planned |
 | **M5** | Wayland backend, auto‑reconnect, layout profiles, updater. | ⏳ Planned |
