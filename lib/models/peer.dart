@@ -5,8 +5,8 @@ enum PeerStatus { discovered, pairing, paired, connected, offline }
 /// A remote device discovered on the LAN and/or paired with this one.
 class Peer {
   final DeviceInfo info;
-  final String host; // IP address
-  final int port;
+  String host; // IP address (can change between beacons)
+  int port;
   PeerStatus status;
 
   /// True once the user has confirmed pairing (PIN) — only trusted peers may
