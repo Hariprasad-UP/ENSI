@@ -1,0 +1,27 @@
+# Build the ENSI Linux desktop app on Ubuntu 20.04 so the binary links against
+# glibc 2.31 and runs on Ubuntu 20.04+ (older machines). Build context = repo root.
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+      curl git unzip xz-utils zip clang cmake ninja-build pkg-config \
+      libgtk-3-dev liblzma-dev build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Flutter refuses to run as root, so build as a normal user.
+RUN useradd -ms /bin/bash builder
+USER builder
+WORKDIR /home/builder
+
+# Pinned Flutter SDK (matches the dev environment).
+RUN curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.38.7-stable.tar.xz -o f.tar.xz && \
+    tar -xf f.tar.xz && rm f.tar.xz
+ENV PATH="/home/builder/flutter/bin:${PATH}"
+RUN git config --global --add safe.directory /home/builder/flutter && \
+    flutter config --enable-linux-desktop && \
+    flutter precache --linux
+
+WORKDIR /app
+COPY --chown=builder:builder . .
+RUN flutter pub get && flutter build linux --release
+# Output bundle lives at /app/build/linux/x64/release/bundle
