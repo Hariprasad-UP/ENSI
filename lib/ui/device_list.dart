@@ -16,35 +16,78 @@ class DeviceList extends StatelessWidget {
     final state = context.watch<AppState>();
     final peers = state.peers;
 
-    if (peers.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.wifi_find, size: 48),
-            SizedBox(height: 8),
-            Text('Searching the local network for ENSI devices…'),
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            icon: const Icon(Icons.add_link),
+            label: const Text('Connect by IP'),
+            onPressed: () => _showConnectByIp(context, state),
+          ),
         ),
-      );
-    }
-
-    return ListView.separated(
-      itemCount: peers.length,
-      separatorBuilder: (context, index) => const Divider(height: 1),
-      itemBuilder: (context, i) {
-        final peer = peers[i];
-        return ListTile(
-          leading: Icon(peer.trusted ? Icons.verified_user : Icons.devices),
-          title: Text(peer.displayName),
-          subtitle: Text('${peer.endpoint} · ${peer.status.name}'),
-          trailing: _trailingFor(context, state, peer),
-          onLongPress: peer.trusted
-              ? () => _confirmRevoke(context, state, peer)
-              : null,
-        );
-      },
+        Expanded(
+          child: peers.isEmpty
+              ? const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wifi_find, size: 48),
+                      SizedBox(height: 8),
+                      Text('Searching the local network…\n'
+                          'If nothing appears, use “Connect by IP”.',
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
+                )
+              : ListView.separated(
+                  itemCount: peers.length,
+                  separatorBuilder: (context, index) => const Divider(height: 1),
+                  itemBuilder: (context, i) {
+                    final peer = peers[i];
+                    return ListTile(
+                      leading: Icon(
+                          peer.trusted ? Icons.verified_user : Icons.devices),
+                      title: Text(peer.displayName),
+                      subtitle: Text('${peer.endpoint} · ${peer.status.name}'),
+                      trailing: _trailingFor(context, state, peer),
+                      onLongPress: peer.trusted
+                          ? () => _confirmRevoke(context, state, peer)
+                          : null,
+                    );
+                  },
+                ),
+        ),
+      ],
     );
+  }
+
+  Future<void> _showConnectByIp(BuildContext context, AppState state) async {
+    final controller = TextEditingController();
+    final ip = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Connect by IP'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Host IP address',
+            hintText: 'e.g. 192.168.1.3',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('Connect')),
+        ],
+      ),
+    );
+    if (ip != null && ip.isNotEmpty) await state.connectToAddress(ip);
   }
 
   Widget _trailingFor(BuildContext context, AppState state, Peer peer) {

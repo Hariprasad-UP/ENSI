@@ -40,6 +40,15 @@ class PeerLink {
 
   Stream<Message> get incoming => _incoming.stream;
 
+  /// Remote peer's IP address (for display of manually-connected peers).
+  String get remoteHost {
+    try {
+      return socket.remoteAddress.address;
+    } catch (_) {
+      return '';
+    }
+  }
+
   void send(Message message) {
     if (_closed) return;
     try {

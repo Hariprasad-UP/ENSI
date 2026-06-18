@@ -119,12 +119,16 @@ class AppState extends ChangeNotifier {
 
   /// Connect to a Host as a client (FR-7, FR-10). Pairing (if needed) proceeds
   /// via [pendingPairing] + [approvePairing].
-  Future<void> connectToHost(Peer host) async {
+  Future<void> connectToHost(Peer host) =>
+      connectToAddress(host.host, port: host.port);
+
+  /// Connect directly to a host by IP[:port] (FR-3) — bypasses discovery, which
+  /// is essential when multicast is blocked by the network or virtual adapters.
+  Future<void> connectToAddress(String host, {int port = kEnsiPort}) async {
     final cert = _cert;
     if (cert == null) return;
     final client = ClientTransport();
-    final link =
-        await client.connect(host.host, port: host.port, context: cert.buildContext());
+    final link = await client.connect(host, port: port, context: cert.buildContext());
     _clientTransport = client;
     _sessions.add(_newSession(
       link,
@@ -154,7 +158,13 @@ class AppState extends ChangeNotifier {
       );
 
   void _onSessionChanged() {
-    // Mirror each session's phase onto its discovered Peer row.
+    // Surface manually-connected peers (Connect-by-IP has no discovered row).
+    for (final s in _sessions) {
+      if (s.peer != null && _peerById(s.peer!.id) == null) {
+        _peers.add(Peer(info: s.peer!, host: s.link.remoteHost, port: kEnsiPort));
+      }
+    }
+    // Mirror each session's phase onto its Peer row.
     for (final s in _sessions) {
       final p = _peerById(s.peerId);
       if (p == null) continue;
