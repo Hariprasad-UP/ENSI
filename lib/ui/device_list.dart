@@ -87,7 +87,23 @@ class DeviceList extends StatelessWidget {
         ],
       ),
     );
-    if (ip != null && ip.isNotEmpty) await state.connectToAddress(ip);
+    if (ip != null && ip.isNotEmpty) {
+      await _connect(context, () => state.connectToAddress(ip), ip);
+    }
+  }
+
+  /// Run a connect action, surfacing any failure as a SnackBar instead of
+  /// crashing the app on an unhandled SocketException.
+  Future<void> _connect(BuildContext context, Future<void> Function() action,
+      String label) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await action();
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not connect to $label: $e')),
+      );
+    }
   }
 
   Widget _trailingFor(BuildContext context, AppState state, Peer peer) {
@@ -105,7 +121,8 @@ class DeviceList extends StatelessWidget {
         );
       default:
         return FilledButton.tonal(
-          onPressed: () => state.connectToHost(peer),
+          onPressed: () =>
+              _connect(context, () => state.connectToHost(peer), peer.info.name),
           child: const Text('Connect'),
         );
     }

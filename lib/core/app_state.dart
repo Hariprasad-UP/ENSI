@@ -88,6 +88,7 @@ class AppState extends ChangeNotifier {
   Future<void> becomeHost() async {
     final cert = _cert;
     if (cert == null) return;
+    try {
     _hostTransport = HostTransport();
     await _hostTransport!.start(context: cert.buildContext());
     _role = DeviceRole.host;
@@ -114,6 +115,14 @@ class AppState extends ChangeNotifier {
       _sessions.add(_newSession(link, isHost: true, onInput: (_) {}));
     });
     _captureSub = backend.captureStream().listen(_router!.onCaptured);
+    } catch (e) {
+      await _hostTransport?.dispose();
+      _hostTransport = null;
+      _router = null;
+      _role = DeviceRole.idle;
+      // ignore: avoid_print
+      print('becomeHost failed: $e');
+    }
     notifyListeners();
   }
 
