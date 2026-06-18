@@ -29,6 +29,12 @@ macos/Pods/
 windows/flutter/ephemeral/
 linux/flutter/ephemeral/
 
+# Release artifacts (published to GitHub Releases, not committed)
+dist/
+
+# Tooling / local
+.claude/
+
 # Secrets / local
 *.keystore
 *.jks
