@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/app_state.dart';
 import '../models/device.dart';
 import 'device_list.dart';
+import 'hand_control_tile.dart';
 import 'layout_editor.dart';
 import 'pairing_dialog.dart';
 import 'trusted_devices_screen.dart';
@@ -81,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
             _RoleControls(state: state),
+            const SizedBox(height: 16),
+            const HandControlTile(),
             const SizedBox(height: 16),
             Text('Devices on your network',
                 style: Theme.of(context).textTheme.titleMedium),

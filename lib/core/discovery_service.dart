@@ -46,11 +46,21 @@ class DiscoveryService {
       reuseAddress: true,
     );
     socket.multicastLoopback = true; // we filter our own beacons by id
+    socket.broadcastEnabled = true;
+    // Join the multicast group on EVERY interface — the default route may be a
+    // VPN or WSL/Docker adapter, so a single join misses the real LAN (FR-1).
     try {
       socket.joinMulticast(InternetAddress(multicastGroup));
-    } catch (_) {
-      // Some interfaces reject join; unicast/broadcast still partially works.
-    }
+    } catch (_) {}
+    try {
+      final ifaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4, includeLoopback: false);
+      for (final iface in ifaces) {
+        try {
+          socket.joinMulticast(InternetAddress(multicastGroup), iface);
+        } catch (_) {}
+      }
+    } catch (_) {}
     socket.listen(_onSocketEvent);
     _socket = socket;
     _sweepTimer = Timer.periodic(_sweepInterval, (_) => _sweep());
@@ -68,14 +78,36 @@ class DiscoveryService {
     _beaconTimer = Timer.periodic(_beaconInterval, (_) => _sendBeacon());
   }
 
-  void _sendBeacon() {
+  Future<void> _sendBeacon() async {
     final self = _self;
-    final socket = _socket;
-    if (self == null || socket == null) return;
+    if (self == null) return;
     final data = utf8.encode(encodeBeacon(self, _tcpPort, _fingerprint));
+    // Primary send via the default route.
     try {
-      socket.send(data, InternetAddress(multicastGroup), discoveryPort);
-    } catch (_) {/* transient send failure; next tick retries */}
+      _socket?.send(data, InternetAddress(multicastGroup), discoveryPort);
+    } catch (_) {}
+    // Also egress every real IPv4 interface (multicast + global broadcast), so
+    // peers are found regardless of which interface holds the default route.
+    try {
+      final ifaces = await NetworkInterface.list(
+          type: InternetAddressType.IPv4, includeLoopback: false);
+      for (final iface in ifaces) {
+        for (final addr in iface.addresses) {
+          if (addr.isLoopback || addr.isLinkLocal) continue;
+          RawDatagramSocket? s;
+          try {
+            s = await RawDatagramSocket.bind(addr, 0);
+            s.broadcastEnabled = true;
+            s.send(data, InternetAddress(multicastGroup), discoveryPort);
+            s.send(data, InternetAddress('255.255.255.255'), discoveryPort);
+          } catch (_) {
+            /* interface may not allow bind/send; skip */
+          } finally {
+            s?.close();
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   void _onSocketEvent(RawSocketEvent event) {

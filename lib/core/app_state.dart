@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../hand/hand_tracker.dart';
+import '../hand/hand_tracker_impl.dart';
+import '../input/hand_input_source.dart';
 import '../input/input_backend.dart';
 import '../models/device.dart';
 import '../models/input_event.dart';
@@ -39,6 +42,7 @@ class AppState extends ChangeNotifier {
   ControlRouter? _router;
   Timer? _clipTimer;
   String _lastClipboard = '';
+  HandInputSource? _handInput;
 
   HostTransport? _hostTransport;
   ClientTransport? _clientTransport;
@@ -300,6 +304,35 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  /// Whether camera hand-tracking is currently driving the cursor.
+  bool get handTrackingOn => _handInput != null;
+
+  /// Start camera hand-tracking. Drives the local cursor (and any paired machine
+  /// via the existing edge-switch). Throws [HandTrackerException] if the native
+  /// module/model isn't present.
+  Future<void> enableHandTracking() async {
+    if (_handInput != null) return;
+    final displays = await backend.queryDisplays();
+    final m = displays.monitors.first;
+    final tracker =
+        HandTrackerImpl(screenWidth: m.width, screenHeight: m.height);
+    final src = HandInputSource(tracker, backend);
+    try {
+      await src.enable(const HandTrackerConfig());
+      _handInput = src;
+      notifyListeners();
+    } catch (_) {
+      await src.dispose();
+      rethrow; // UI surfaces the failure
+    }
+  }
+
+  Future<void> disableHandTracking() async {
+    await _handInput?.dispose();
+    _handInput = null;
+    notifyListeners();
+  }
+
   Future<void> reset() async {
     await _captureSub?.cancel();
     await _hostConnSub?.cancel();
@@ -324,6 +357,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _clipTimer?.cancel();
+    _handInput?.dispose();
     _peerSub?.cancel();
     _captureSub?.cancel();
     _hostConnSub?.cancel();
